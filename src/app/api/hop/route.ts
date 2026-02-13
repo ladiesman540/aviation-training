@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { unstable_noStore as noStore } from "next/cache";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { questions, sections } from "@/db/schema";
 import { eq, inArray, sql } from "drizzle-orm";
-import { distributeCards, PHASES } from "@/lib/hop-engine";
+import { distributeCards, PHASES, PHASE_CARD_COUNTS } from "@/lib/hop-engine";
 import type { FlightPhase } from "@/types";
 import { generateFlightBrief } from "@/data/flight-briefs";
 import { SCENARIO_MAP } from "@/data/pstar-scenarios";
@@ -10,6 +11,9 @@ import { detectWeatherConditions, getWeatherPreferredIds } from "@/lib/weather-b
 import { pickRadioExchanges } from "@/data/radio-exchanges";
 import { ROC_A_CARDS, type RocACard } from "@/data/roc-a-cards";
 import { maybePickEmergency, type EmergencyEvent } from "@/data/emergency-events";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type QuestionRow = {
   id: string;
@@ -43,9 +47,64 @@ type EmergencyPlan = {
   cards: EmergencyQuestionCandidate[];
 };
 
-const MIN_BASE_QUESTIONS = 6;
+type MissionType = "local" | "practice" | "short-hop" | "cross-country";
+type AircraftType = "C150" | "C172";
+type PhaseBounds = Record<FlightPhase, [number, number]>;
+
 const MAX_EMERGENCY_QUESTIONS = 2;
 const MAX_RISK_POINTS = 3;
+const MISSION_TARGETS: Record<MissionType, [number, number]> = {
+  local: [8, 10],
+  practice: [10, 12],
+  "short-hop": [8, 9],
+  "cross-country": [20, 20],
+};
+
+const MISSION_PHASE_BOUNDS: Record<MissionType, PhaseBounds> = {
+  local: PHASE_CARD_COUNTS,
+  practice: PHASE_CARD_COUNTS,
+  "short-hop": PHASE_CARD_COUNTS,
+  "cross-country": {
+    preflight: [2, 5],
+    taxi_depart: [3, 6],
+    enroute: [5, 10],
+    arrival: [3, 5],
+  },
+};
+
+const MISSION_PHASE_PROFILE: Record<
+  MissionType,
+  { boost: FlightPhase[]; reduce: FlightPhase[] }
+> = {
+  local: {
+    boost: ["taxi_depart", "arrival"],
+    reduce: ["enroute", "preflight"],
+  },
+  practice: {
+    boost: ["enroute", "preflight"],
+    reduce: ["arrival", "taxi_depart"],
+  },
+  "short-hop": {
+    boost: ["enroute", "arrival"],
+    reduce: ["taxi_depart", "preflight"],
+  },
+  "cross-country": {
+    boost: ["enroute", "arrival"],
+    reduce: ["preflight", "taxi_depart"],
+  },
+};
+
+const AIRCRAFT_RISK_BONUS: Record<AircraftType, number> = {
+  C150: 1,
+  C172: 0,
+};
+
+const MISSION_EMERGENCY_ATTEMPTS: Record<MissionType, number> = {
+  local: 1,
+  practice: 1,
+  "short-hop": 1,
+  "cross-country": 3,
+};
 
 const QUESTION_SELECT = {
   id: questions.id,
@@ -198,10 +257,113 @@ async function loadEmergencyCandidates(event: EmergencyEvent): Promise<Emergency
   ]);
 }
 
+function normalizeMission(raw: string | null): MissionType {
+  if (
+    raw === "practice" ||
+    raw === "short-hop" ||
+    raw === "local" ||
+    raw === "cross-country" ||
+    raw === "cross-counter"
+  ) {
+    if (raw === "cross-counter") return "cross-country";
+    return raw;
+  }
+  return "local";
+}
+
+function normalizeAircraft(raw: string | null): AircraftType {
+  if (raw === "C150" || raw === "C172") {
+    return raw;
+  }
+  return "C172";
+}
+
+function rebalanceByMission(
+  counts: Record<FlightPhase, number>,
+  mission: MissionType,
+  bounds: PhaseBounds
+): Record<FlightPhase, number> {
+  const next = { ...counts };
+  const profile = MISSION_PHASE_PROFILE[mission];
+
+  for (const target of profile.boost) {
+    const [, targetMax] = bounds[target];
+    if (next[target] >= targetMax) continue;
+
+    const donor = profile.reduce.find((phase) => {
+      const [min] = bounds[phase];
+      return next[phase] > min;
+    });
+    if (!donor) continue;
+
+    next[donor]--;
+    next[target]++;
+  }
+
+  return next;
+}
+
+function sumPhaseMins(bounds: PhaseBounds): number {
+  return PHASES.reduce((sum, phase) => sum + bounds[phase][0], 0);
+}
+
+function sumPhaseMax(bounds: PhaseBounds): number {
+  return PHASES.reduce((sum, phase) => sum + bounds[phase][1], 0);
+}
+
+function distributeByBounds(
+  targetTotal: number,
+  bounds: PhaseBounds
+): Record<FlightPhase, number> {
+  const counts: Record<FlightPhase, number> = {
+    preflight: bounds.preflight[0],
+    taxi_depart: bounds.taxi_depart[0],
+    enroute: bounds.enroute[0],
+    arrival: bounds.arrival[0],
+  };
+
+  let total = sumPhaseMins(bounds);
+  const cappedTarget = Math.min(targetTotal, sumPhaseMax(bounds));
+  const order: FlightPhase[] = ["enroute", "taxi_depart", "arrival", "preflight"];
+  let idx = 0;
+
+  while (total < cappedTarget) {
+    const phase = order[idx % order.length]!;
+    const [, max] = bounds[phase];
+    if (counts[phase] < max) {
+      counts[phase]++;
+      total++;
+    }
+    idx++;
+    if (idx > 400) break;
+  }
+
+  return counts;
+}
+
+function maybePickEmergencyForMission(
+  phase: FlightPhase,
+  riskSeed: number,
+  mission: MissionType
+): EmergencyEvent | null {
+  const attempts = MISSION_EMERGENCY_ATTEMPTS[mission];
+  for (let i = 0; i < attempts; i++) {
+    const event = maybePickEmergency(phase, riskSeed);
+    if (event) return event;
+  }
+  return null;
+}
+
 /** GET: Fetch hop sequence — question cards interleaved with radio exchanges */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const targetQuestionCount = 8 + Math.floor(Math.random() * 5); // 8-12
+    noStore();
+    const mission = normalizeMission(request.nextUrl.searchParams.get("mission"));
+    const aircraft = normalizeAircraft(request.nextUrl.searchParams.get("aircraft"));
+    const missionBounds = MISSION_PHASE_BOUNDS[mission];
+    const minBaseQuestions = sumPhaseMins(missionBounds);
+    const [minQuestions, maxQuestions] = MISSION_TARGETS[mission];
+    const targetQuestionCount = minQuestions + Math.floor(Math.random() * (maxQuestions - minQuestions + 1));
     const brief = generateFlightBrief();
     const wxConditions = detectWeatherConditions(brief.metar.template.decoded);
     const tokens: TokenValues = {
@@ -218,10 +380,14 @@ export async function GET() {
       wxConditions.filter((condition) => condition !== "good_vfr").length,
       MAX_RISK_POINTS
     );
+    const riskSeed = Math.min(
+      weatherRiskSeed + AIRCRAFT_RISK_BONUS[aircraft],
+      MAX_RISK_POINTS
+    );
 
     const emergencyTriggers = PHASES
       .map((phase) => {
-        const event = maybePickEmergency(phase, weatherRiskSeed);
+        const event = maybePickEmergencyForMission(phase, riskSeed, mission);
         return event ? { phase, event } : null;
       })
       .filter((entry): entry is { phase: FlightPhase; event: EmergencyEvent } => entry !== null);
@@ -236,7 +402,7 @@ export async function GET() {
 
     let emergencyBudget = Math.min(MAX_EMERGENCY_QUESTIONS, emergencyCandidates.length);
     while (
-      targetQuestionCount - ((plannedRocA ? 1 : 0) + emergencyBudget) < MIN_BASE_QUESTIONS
+      targetQuestionCount - ((plannedRocA ? 1 : 0) + emergencyBudget) < minBaseQuestions
     ) {
       if (emergencyBudget > 0) {
         emergencyBudget--;
@@ -270,7 +436,13 @@ export async function GET() {
 
     const reservedQuestions = (plannedRocA ? 1 : 0) + (emergencyPlan ? emergencyPlan.cards.length : 0);
     const baseQuestionTarget = targetQuestionCount - reservedQuestions;
-    const phaseCounts = distributeCards(baseQuestionTarget);
+    const phaseCounts = rebalanceByMission(
+      mission === "cross-country"
+        ? distributeByBounds(baseQuestionTarget, missionBounds)
+        : distributeCards(baseQuestionTarget),
+      mission,
+      missionBounds
+    );
 
     const sequence: Record<string, unknown>[] = [];
     const usedQuestionIds = new Set<string>();
@@ -396,8 +568,28 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({ sequence, brief, wxConditions });
+    return NextResponse.json(
+      {
+        sequence,
+        brief,
+        wxConditions,
+        mode: { mission, aircraft },
+      },
+      {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+        },
+      }
+    );
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(
+      { error: String(e) },
+      {
+        status: 500,
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+        },
+      }
+    );
   }
 }

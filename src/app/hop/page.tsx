@@ -53,11 +53,12 @@ export default function HopPage() {
           <label className="block text-sm text-[#8b949e] mb-2 font-display text-xs tracking-wider">
             MISSION
           </label>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { value: "local", label: "Local Circuits" },
               { value: "practice", label: "Practice Area" },
               { value: "short-hop", label: "Short Hop" },
+              { value: "cross-country", label: "Cross Country (20)" },
             ].map((m) => (
               <button
                 key={m.value}

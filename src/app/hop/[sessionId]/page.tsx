@@ -60,10 +60,14 @@ export default function HopSessionPage() {
   const [cardTimer, setCardTimer] = useState<number | null>(null);
   const [showMetarRef, setShowMetarRef] = useState(false);
   const startTime = useRef(Date.now());
+  const hasStartedFlight = useRef(false);
 
   // Fetch sequence (mixed question cards + radio exchanges) and flight brief
   useEffect(() => {
-    fetch("/api/hop")
+    fetch(
+      `/api/hop?aircraft=${encodeURIComponent(aircraft)}&mission=${encodeURIComponent(missionType)}`,
+      { cache: "no-store" }
+    )
       .then((r) => {
         if (!r.ok) throw new Error(`API error: ${r.status}`);
         return r.json();
@@ -124,7 +128,7 @@ export default function HopSessionPage() {
         setGameState("brief");
       })
       .catch(() => setSequence([]));
-  }, []);
+  }, [aircraft, missionType]);
 
   // Timer (only ticks during playing and transition states)
   useEffect(() => {
@@ -142,6 +146,20 @@ export default function HopSessionPage() {
   }, [gameState]);
 
   const currentItem = sequence[currentIndex];
+
+  // Reset viewport to top when advancing to a new in-flight item.
+  useEffect(() => {
+    if (gameState !== "playing") return;
+    if (sequence.length === 0) return;
+
+    if (!hasStartedFlight.current) {
+      hasStartedFlight.current = true;
+      return;
+    }
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+  }, [currentIndex, gameState, sequence.length]);
 
   // SVFR per-card timer — auto-bust if you take too long on a card
   useEffect(() => {

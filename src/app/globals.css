@@ -22,11 +22,13 @@
 /* Prevent pull-to-refresh and set dark background everywhere */
 html {
   background-color: #060809;
+  overscroll-behavior-y: none;
 }
 
 body {
   background-color: #060809;
   margin: 0;
+  overscroll-behavior-y: none;
 }
 
 /* Main app container - this is where scrolling happens */
@@ -34,14 +36,7 @@ body {
   min-height: 100vh;
   min-height: 100dvh;
   overflow-x: hidden;
-}
-
-/* Extend background color way past content to catch overscroll */
-.app-scroll-container::after {
-  content: '';
-  display: block;
-  height: 100vh;
-  background-color: #060809;
+  overscroll-behavior-y: contain;
 }
 
 /* Prevent text selection during gameplay taps */
