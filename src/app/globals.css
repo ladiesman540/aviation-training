@@ -20,8 +20,14 @@
 }
 
 /* Prevent pull-to-refresh on mobile during gameplay */
-html {
+html, body {
   overscroll-behavior: none;
+  background-color: #060809;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh; /* dynamic viewport height for mobile */
 }
 
 /* Prevent text selection during gameplay taps */

@@ -35,8 +35,8 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
-      <body>
-        <div className="min-h-screen bg-bg-deep text-[#e8ecf0]">
+      <body className="bg-bg-deep">
+        <div className="min-h-screen min-h-[100dvh] bg-bg-deep text-[#e8ecf0]">
           <div className="bg-grid fixed inset-0 pointer-events-none z-0" aria-hidden />
           <div className="bg-noise fixed inset-0 pointer-events-none z-0" aria-hidden />
 

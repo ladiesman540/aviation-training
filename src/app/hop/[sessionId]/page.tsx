@@ -62,12 +62,18 @@ export default function HopSessionPage() {
   // Fetch sequence (mixed question cards + radio exchanges) and flight brief
   useEffect(() => {
     fetch("/api/hop")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`API error: ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
+        if (data.error) throw new Error(data.error);
         const seqData = data.sequence ?? data.cards ?? data;
         const briefData = data.brief ?? null;
 
-        if (!Array.isArray(seqData) || seqData.length === 0) return;
+        if (!Array.isArray(seqData) || seqData.length === 0) {
+          throw new Error("No questions returned from API");
+        }
 
         const mapped: HopSequenceItem[] = seqData.map((d: Record<string, unknown>) => {
           if (d.type === "emergency") {
