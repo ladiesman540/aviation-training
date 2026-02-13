@@ -1,0 +1,16 @@
+export const SECTIONS = [
+  { number: 1, name: "Collision Avoidance" },
+  { number: 2, name: "Visual Signals" },
+  { number: 3, name: "Communications" },
+  { number: 4, name: "Aerodromes" },
+  { number: 5, name: "Equipment" },
+  { number: 6, name: "Pilot Responsibilities" },
+  { number: 7, name: "Wake Turbulence" },
+  { number: 8, name: "Aeromedical" },
+  { number: 9, name: "Flight Plans and Flight Itineraries" },
+  { number: 10, name: "Clearances and Instructions" },
+  { number: 11, name: "Aircraft Operations" },
+  { number: 12, name: "Regulations – Canadian Airspace" },
+  { number: 13, name: "Controlled Airspace" },
+  { number: 14, name: "Aviation Occurrences" },
+] as const;

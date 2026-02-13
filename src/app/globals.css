@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-deep: #060809;
+  --bg-panel: #0c0f14;
+  --bg-elevated: #12161d;
+  --border: #1e252d;
+  --border-glow: rgba(0, 255, 136, 0.15);
+  --accent-green: #00ff88;
+  --accent-amber: #ffb300;
+  --accent-blue: #00d4ff;
+  --text-primary: #e8ecf0;
+  --text-secondary: #8b949e;
+  --text-muted: #5c6570;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+}
+
+/* Prevent pull-to-refresh on mobile during gameplay */
+html {
+  overscroll-behavior: none;
+}
+
+/* Prevent text selection during gameplay taps */
+.select-none {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Tap highlight removal for mobile */
+button, a, [role="button"] {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Safe area padding for notched phones */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.font-display {
+  font-family: var(--font-display), monospace;
+}
+
+.font-body {
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+.bg-grid {
+  background-image:
+    linear-gradient(rgba(0, 255, 136, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 136, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.bg-noise {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Mobile touch targets — minimum 44px */
+@media (max-width: 768px) {
+  button, a, [role="button"] {
+    min-height: 44px;
+  }
+
+  /* Tighter padding on mobile */
+  .max-w-2xl {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}
