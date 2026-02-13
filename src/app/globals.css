@@ -19,28 +19,29 @@
   --radius-lg: 8px;
 }
 
-/* Prevent pull-to-refresh and overscroll bounce */
+/* Prevent pull-to-refresh and set dark background everywhere */
 html {
   background-color: #060809;
-  height: 100%;
-  overflow: hidden;
 }
 
 body {
   background-color: #060809;
-  height: 100%;
-  overflow: hidden;
   margin: 0;
 }
 
 /* Main app container - this is where scrolling happens */
 .app-scroll-container {
-  height: 100vh;
-  height: 100dvh;
-  overflow-y: auto;
+  min-height: 100vh;
+  min-height: 100dvh;
   overflow-x: hidden;
-  overscroll-behavior-y: none;
-  -webkit-overflow-scrolling: touch;
+}
+
+/* Extend background color way past content to catch overscroll */
+.app-scroll-container::after {
+  content: '';
+  display: block;
+  height: 100vh;
+  background-color: #060809;
 }
 
 /* Prevent text selection during gameplay taps */
