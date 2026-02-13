@@ -33,7 +33,14 @@ export async function GET(request: NextRequest) {
     }
 
     if (sectionId) {
-      conditions.push(eq(sections.id, parseInt(sectionId, 10)));
+      const parsedSectionId = Number.parseInt(sectionId, 10);
+      if (Number.isNaN(parsedSectionId)) {
+        return NextResponse.json(
+          { error: "Invalid section parameter" },
+          { status: 400 }
+        );
+      }
+      conditions.push(eq(sections.id, parsedSectionId));
     }
 
     const whereClause = conditions.length > 0 ? and(...conditions) : undefined;

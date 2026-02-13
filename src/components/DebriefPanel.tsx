@@ -1,7 +1,7 @@
 "use client";
 
 import type { HopCard, HopResponse } from "@/lib/hop-engine";
-import { PHASE_LABELS } from "@/lib/hop-engine";
+import { PHASE_LABELS, MAX_RISK } from "@/lib/hop-engine";
 import type { FlightPhase } from "@/types";
 import { useState } from "react";
 
@@ -108,7 +108,7 @@ export function DebriefPanel({
         </h2>
         <div className="flex items-end gap-1 h-16">
           {responses.map((r, i) => {
-            const height = Math.max((r.riskAfter / 10) * 100, 5);
+            const height = Math.max((r.riskAfter / MAX_RISK) * 100, 5);
             const color = r.wasBust
               ? "bg-red-500"
               : !r.isCorrect
@@ -116,10 +116,10 @@ export function DebriefPanel({
                 : "bg-accent-green/40";
             return (
               <div
-                key={i}
+                key={`${r.questionId}-${i}`}
                 className={`flex-1 rounded-t transition-all ${color}`}
                 style={{ height: `${height}%` }}
-                title={`Q${r.questionId}: risk ${r.riskAfter}/10`}
+                title={`Q${r.questionId}: risk ${r.riskAfter}/${MAX_RISK}`}
               />
             );
           })}
@@ -137,7 +137,7 @@ export function DebriefPanel({
             if (!card) return null;
             const isExpanded = expandedCard === r.questionId;
             return (
-              <div key={r.questionId} className="bg-bg-panel border border-[#1e252d] rounded-lg overflow-hidden">
+              <div key={`${r.questionId}-${r.phase}-${r.selectedOption}`} className="bg-bg-panel border border-[#1e252d] rounded-lg overflow-hidden">
                 <button
                   onClick={() => setExpandedCard(isExpanded ? null : r.questionId)}
                   className="w-full flex items-center gap-3 p-3 text-left hover:bg-bg-elevated/50 transition"

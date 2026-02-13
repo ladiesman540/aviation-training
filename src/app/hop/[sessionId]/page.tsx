@@ -14,6 +14,7 @@ import {
   type HopSequenceItem,
   type HopResponse,
   PHASES,
+  MAX_RISK,
   processAnswer,
   HOP_TIMEOUT_SECONDS,
   SVFR_CARD_TIMER_SECONDS,
@@ -57,6 +58,7 @@ export default function HopSessionPage() {
   const [activeEmergency, setActiveEmergency] = useState<HopEmergency | null>(null);
   const [isSvfr, setIsSvfr] = useState(false);
   const [cardTimer, setCardTimer] = useState<number | null>(null);
+  const [showMetarRef, setShowMetarRef] = useState(false);
   const startTime = useRef(Date.now());
 
   // Fetch sequence (mixed question cards + radio exchanges) and flight brief
@@ -376,9 +378,130 @@ export default function HopSessionPage() {
             </div>
           </div>
         </div>
+
+        {/* METAR Reference Toggle */}
+        <button
+          onClick={() => setShowMetarRef(!showMetarRef)}
+          className="mt-4 w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-[#8b949e] hover:text-accent-green transition"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+          </svg>
+          <span className="font-display text-xs tracking-wider">
+            {showMetarRef ? "HIDE METAR REFERENCE" : "METAR REFERENCE"}
+          </span>
+          <svg xmlns="http://www.w3.org/2000/svg" className={`h-3 w-3 transition-transform ${showMetarRef ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {/* METAR Reference Panel */}
+        {showMetarRef && (
+          <div className="mt-2 bg-bg-panel border border-[#1e252d] rounded-lg overflow-hidden text-xs">
+            <div className="px-4 py-3 bg-bg-elevated border-b border-[#1e252d]">
+              <span className="font-display text-[10px] tracking-widest text-accent-amber/70">METAR DECODING REFERENCE</span>
+            </div>
+            <div className="px-4 py-3 space-y-4 max-h-[60vh] overflow-y-auto">
+              {/* Time */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">TIME</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">DDHHMMZ</span> — Day / Hour / Minute in UTC</p>
+              </div>
+
+              {/* Wind */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">WIND</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">DDDSSKT</span> — Direction° / Speed in knots</p>
+                  <p><span className="text-accent-green font-mono">DDDSSGSKT</span> — With gusts (G = gust)</p>
+                  <p><span className="text-accent-green font-mono">VRB##KT</span> — Variable direction</p>
+                  <p><span className="text-accent-green font-mono">00000KT</span> — Calm</p>
+                </div>
+              </div>
+
+              {/* Visibility */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">VISIBILITY</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">#SM</span> — Statute miles</p>
+                  <p><span className="text-accent-green font-mono">1/2SM, 1/4SM</span> — Fractional</p>
+                  <p><span className="text-accent-green font-mono">P6SM</span> — Plus (greater than) 6 SM</p>
+                </div>
+              </div>
+
+              {/* Clouds */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">CLOUD COVERAGE</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">SKC</span> — Sky clear</p>
+                  <p><span className="text-accent-green font-mono">CLR</span> — Clear below 12,000</p>
+                  <p><span className="text-accent-green font-mono">FEW</span> — Few (1-2/8)</p>
+                  <p><span className="text-accent-green font-mono">SCT</span> — Scattered (3-4/8)</p>
+                  <p><span className="text-accent-green font-mono">BKN</span> — Broken (5-7/8) ✓</p>
+                  <p><span className="text-accent-green font-mono">OVC</span> — Overcast (8/8) ✓</p>
+                  <p><span className="text-accent-green font-mono">VV###</span> — Vert. visibility ✓</p>
+                  <p className="text-[#5c6570]">✓ = ceiling</p>
+                </div>
+                <p className="mt-1 text-[#5c6570]">Height in 100s of feet AGL (e.g., 035 = 3,500 ft)</p>
+              </div>
+
+              {/* Cloud Types */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">CLOUD TYPES</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">CB</span> — Cumulonimbus (thunderstorm)</p>
+                  <p><span className="text-accent-green font-mono">TCU</span> — Towering cumulus</p>
+                </div>
+              </div>
+
+              {/* Weather */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">WEATHER PHENOMENA</p>
+                <p className="text-[#5c6570] mb-2">Intensity: <span className="text-accent-green font-mono">-</span> light, (none) moderate, <span className="text-accent-green font-mono">+</span> heavy</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">RA</span> — Rain</p>
+                  <p><span className="text-accent-green font-mono">SN</span> — Snow</p>
+                  <p><span className="text-accent-green font-mono">DZ</span> — Drizzle</p>
+                  <p><span className="text-accent-green font-mono">SH</span> — Showers</p>
+                  <p><span className="text-accent-green font-mono">TS</span> — Thunderstorm</p>
+                  <p><span className="text-accent-green font-mono">FG</span> — Fog (&lt;5/8 SM)</p>
+                  <p><span className="text-accent-green font-mono">BR</span> — Mist (5/8-6 SM)</p>
+                  <p><span className="text-accent-green font-mono">HZ</span> — Haze</p>
+                  <p><span className="text-accent-green font-mono">FZ</span> — Freezing (prefix)</p>
+                  <p><span className="text-accent-green font-mono">BL</span> — Blowing (prefix)</p>
+                </div>
+                <p className="mt-1 text-[#5c6570]">e.g., -SHRA = light rain showers, FZRA = freezing rain</p>
+              </div>
+
+              {/* Temp/Dew */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">TEMP / DEWPOINT</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">TT/DD</span> — °Celsius (<span className="text-accent-green font-mono">M</span> = minus, e.g., M05 = -5°C)</p>
+              </div>
+
+              {/* Altimeter */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">ALTIMETER</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">ANNNN</span> — Inches Hg (e.g., A2992 = 29.92&quot;)</p>
+              </div>
+
+              {/* Flight Categories */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">FLIGHT CATEGORIES</p>
+                <div className="space-y-1">
+                  <p><span className="text-accent-green font-mono">VFR</span> — Ceiling &gt;3,000 ft AND vis &gt;5 SM</p>
+                  <p><span className="text-accent-blue font-mono">MVFR</span> — Ceiling 1,000-3,000 ft OR vis 3-5 SM</p>
+                  <p><span className="text-red-400 font-mono">IFR</span> — Ceiling 500-999 ft OR vis 1-3 SM</p>
+                  <p><span className="text-red-500 font-mono">LIFR</span> — Ceiling &lt;500 ft OR vis &lt;1 SM</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <button
           onClick={() => setGameState("wx_decode")}
-          className="mt-6 w-full px-6 py-4 font-display font-semibold text-bg-deep bg-accent-green rounded-lg hover:bg-[#00e077] transition text-lg"
+          className="mt-4 w-full px-6 py-4 font-display font-semibold text-bg-deep bg-accent-green rounded-lg hover:bg-[#00e077] transition text-lg"
         >
           Decode Weather
         </button>
@@ -395,11 +518,131 @@ export default function HopSessionPage() {
     return (
       <div className="max-w-lg mx-auto px-6 py-8">
         {/* Raw METAR reminder */}
-        <div className="bg-bg-deep rounded-lg p-3 border border-[#1e252d] mb-6">
+        <div className="bg-bg-deep rounded-lg p-3 border border-[#1e252d] mb-4">
           <p className="font-display text-xs text-accent-green leading-relaxed break-all">
             {brief.metar.raw}
           </p>
         </div>
+
+        {/* METAR Reference Toggle */}
+        <button
+          onClick={() => setShowMetarRef(!showMetarRef)}
+          className="mb-4 w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-[#8b949e] hover:text-accent-green transition border border-[#1e252d] rounded-lg hover:border-accent-green/30"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+          </svg>
+          <span className="font-display text-xs tracking-wider">
+            {showMetarRef ? "HIDE REFERENCE" : "METAR REFERENCE"}
+          </span>
+          <svg xmlns="http://www.w3.org/2000/svg" className={`h-3 w-3 transition-transform ${showMetarRef ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {/* METAR Reference Panel */}
+        {showMetarRef && (
+          <div className="mb-6 bg-bg-panel border border-[#1e252d] rounded-lg overflow-hidden text-xs">
+            <div className="px-4 py-3 bg-bg-elevated border-b border-[#1e252d]">
+              <span className="font-display text-[10px] tracking-widest text-accent-amber/70">METAR DECODING REFERENCE</span>
+            </div>
+            <div className="px-4 py-3 space-y-4 max-h-[40vh] overflow-y-auto">
+              {/* Time */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">TIME</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">DDHHMMZ</span> — Day / Hour / Minute in UTC</p>
+              </div>
+
+              {/* Wind */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">WIND</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">DDDSSKT</span> — Direction° / Speed in knots</p>
+                  <p><span className="text-accent-green font-mono">DDDSSGSKT</span> — With gusts (G = gust)</p>
+                  <p><span className="text-accent-green font-mono">VRB##KT</span> — Variable direction</p>
+                  <p><span className="text-accent-green font-mono">00000KT</span> — Calm</p>
+                </div>
+              </div>
+
+              {/* Visibility */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">VISIBILITY</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">#SM</span> — Statute miles</p>
+                  <p><span className="text-accent-green font-mono">1/2SM, 1/4SM</span> — Fractional</p>
+                  <p><span className="text-accent-green font-mono">P6SM</span> — Plus (greater than) 6 SM</p>
+                </div>
+              </div>
+
+              {/* Clouds */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">CLOUD COVERAGE</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">SKC</span> — Sky clear</p>
+                  <p><span className="text-accent-green font-mono">CLR</span> — Clear below 12,000</p>
+                  <p><span className="text-accent-green font-mono">FEW</span> — Few (1-2/8)</p>
+                  <p><span className="text-accent-green font-mono">SCT</span> — Scattered (3-4/8)</p>
+                  <p><span className="text-accent-green font-mono">BKN</span> — Broken (5-7/8) ✓</p>
+                  <p><span className="text-accent-green font-mono">OVC</span> — Overcast (8/8) ✓</p>
+                  <p><span className="text-accent-green font-mono">VV###</span> — Vert. visibility ✓</p>
+                  <p className="text-[#5c6570]">✓ = ceiling</p>
+                </div>
+                <p className="mt-1 text-[#5c6570]">Height in 100s of feet AGL (e.g., 035 = 3,500 ft)</p>
+              </div>
+
+              {/* Cloud Types */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">CLOUD TYPES</p>
+                <div className="space-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">CB</span> — Cumulonimbus (thunderstorm)</p>
+                  <p><span className="text-accent-green font-mono">TCU</span> — Towering cumulus</p>
+                </div>
+              </div>
+
+              {/* Weather */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">WEATHER PHENOMENA</p>
+                <p className="text-[#5c6570] mb-2">Intensity: <span className="text-accent-green font-mono">-</span> light, (none) moderate, <span className="text-accent-green font-mono">+</span> heavy</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[#8b949e]">
+                  <p><span className="text-accent-green font-mono">RA</span> — Rain</p>
+                  <p><span className="text-accent-green font-mono">SN</span> — Snow</p>
+                  <p><span className="text-accent-green font-mono">DZ</span> — Drizzle</p>
+                  <p><span className="text-accent-green font-mono">SH</span> — Showers</p>
+                  <p><span className="text-accent-green font-mono">TS</span> — Thunderstorm</p>
+                  <p><span className="text-accent-green font-mono">FG</span> — Fog (&lt;5/8 SM)</p>
+                  <p><span className="text-accent-green font-mono">BR</span> — Mist (5/8-6 SM)</p>
+                  <p><span className="text-accent-green font-mono">HZ</span> — Haze</p>
+                  <p><span className="text-accent-green font-mono">FZ</span> — Freezing (prefix)</p>
+                  <p><span className="text-accent-green font-mono">BL</span> — Blowing (prefix)</p>
+                </div>
+                <p className="mt-1 text-[#5c6570]">e.g., -SHRA = light rain showers, FZRA = freezing rain</p>
+              </div>
+
+              {/* Temp/Dew */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">TEMP / DEWPOINT</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">TT/DD</span> — °Celsius (<span className="text-accent-green font-mono">M</span> = minus, e.g., M05 = -5°C)</p>
+              </div>
+
+              {/* Altimeter */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">ALTIMETER</p>
+                <p className="text-[#8b949e]"><span className="text-accent-green font-mono">ANNNN</span> — Inches Hg (e.g., A2992 = 29.92&quot;)</p>
+              </div>
+
+              {/* Flight Categories */}
+              <div>
+                <p className="font-display text-[10px] text-[#5c6570] tracking-wider mb-1">FLIGHT CATEGORIES</p>
+                <div className="space-y-1">
+                  <p><span className="text-accent-green font-mono">VFR</span> — Ceiling &gt;3,000 ft AND vis &gt;5 SM</p>
+                  <p><span className="text-accent-blue font-mono">MVFR</span> — Ceiling 1,000-3,000 ft OR vis 3-5 SM</p>
+                  <p><span className="text-red-400 font-mono">IFR</span> — Ceiling 500-999 ft OR vis 1-3 SM</p>
+                  <p><span className="text-red-500 font-mono">LIFR</span> — Ceiling &lt;500 ft OR vis &lt;1 SM</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="bg-bg-panel border border-[#1e252d] rounded-lg p-6">
           <span className="font-display text-[10px] tracking-widest text-accent-amber block mb-3">
@@ -668,7 +911,7 @@ export default function HopSessionPage() {
           onClick={() => {
             // Apply emergency effects
             setTimeLeft((t) => Math.max(t - currentEmergency.timerPenalty, 60));
-            setRisk((r) => Math.min(r + currentEmergency.immediateRisk, 10));
+            setRisk((r) => Math.min(r + currentEmergency.immediateRisk, MAX_RISK));
             setActiveEmergency(currentEmergency);
             setRiskAnimating(true);
             setTimeout(() => setRiskAnimating(false), 1000);

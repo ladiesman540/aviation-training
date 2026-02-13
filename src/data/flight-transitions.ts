@@ -94,7 +94,7 @@ export function pickTransition(
   risk: number
 ): string {
   const set = TRANSITIONS[phase];
-  if (risk >= 5 && !wasCorrect) {
+  if (risk >= 2 && !wasCorrect) {
     return set.highRisk[Math.floor(Math.random() * set.highRisk.length)]!;
   }
   const pool = wasCorrect ? set.correct : set.wrong;

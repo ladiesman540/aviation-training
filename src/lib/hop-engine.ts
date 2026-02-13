@@ -106,13 +106,13 @@ export function distributeCards(targetTotal: number): Record<FlightPhase, number
 
 /**
  * Check if a response causes a bust or adds risk.
- * With MAX_RISK=3, one wrong answer on a minor = risk+1 (2 mistakes = bust territory).
+ * With MAX_RISK=3, wrong answers add their configured risk points (clamped).
  * Critical wrong = immediate bust.
  */
 export function processAnswer(
   isCorrect: boolean,
   isCritical: boolean,
-  _riskPoints: number,
+  riskPoints: number,
   currentRisk: number
 ): { newRisk: number; busted: boolean } {
   if (isCorrect) {
@@ -121,8 +121,8 @@ export function processAnswer(
   if (isCritical) {
     return { newRisk: MAX_RISK, busted: true };
   }
-  // Every wrong answer adds exactly 1 risk. At risk 3 = bust on next wrong.
-  const newRisk = Math.min(currentRisk + 1, MAX_RISK);
+  const appliedRisk = Math.max(1, Math.trunc(riskPoints || 1));
+  const newRisk = Math.min(currentRisk + appliedRisk, MAX_RISK);
   const busted = newRisk >= MAX_RISK;
   return { newRisk, busted };
 }

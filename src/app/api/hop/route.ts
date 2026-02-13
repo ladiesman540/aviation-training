@@ -1,326 +1,402 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { questions, sections } from "@/db/schema";
-import { eq, sql, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { distributeCards, PHASES } from "@/lib/hop-engine";
 import type { FlightPhase } from "@/types";
 import { generateFlightBrief } from "@/data/flight-briefs";
 import { SCENARIO_MAP } from "@/data/pstar-scenarios";
 import { detectWeatherConditions, getWeatherPreferredIds } from "@/lib/weather-bias";
 import { pickRadioExchanges } from "@/data/radio-exchanges";
-import { ROC_A_CARDS } from "@/data/roc-a-cards";
-import { maybePickEmergency } from "@/data/emergency-events";
+import { ROC_A_CARDS, type RocACard } from "@/data/roc-a-cards";
+import { maybePickEmergency, type EmergencyEvent } from "@/data/emergency-events";
+
+type QuestionRow = {
+  id: string;
+  stem: string;
+  option1: string;
+  option2: string;
+  option3: string;
+  option4: string;
+  correctOption: number;
+  phase: string;
+  flightContext: string;
+  explanation: string;
+  isCritical: boolean | null;
+  riskPoints: number;
+  sectionName: string;
+};
+
+type EmergencyQuestionCandidate =
+  | { kind: "db"; card: QuestionRow }
+  | { kind: "roc"; card: RocACard };
+
+type TokenValues = {
+  callsign: string;
+  runway: string;
+  icao: string;
+};
+
+type EmergencyPlan = {
+  phase: FlightPhase;
+  event: EmergencyEvent;
+  cards: EmergencyQuestionCandidate[];
+};
+
+const MIN_BASE_QUESTIONS = 6;
+const MAX_EMERGENCY_QUESTIONS = 2;
+const MAX_RISK_POINTS = 3;
+
+const QUESTION_SELECT = {
+  id: questions.id,
+  stem: questions.stem,
+  option1: questions.option1,
+  option2: questions.option2,
+  option3: questions.option3,
+  option4: questions.option4,
+  correctOption: questions.correctOption,
+  phase: questions.phase,
+  flightContext: questions.flightContext,
+  explanation: questions.explanation,
+  isCritical: questions.isCritical,
+  riskPoints: questions.riskPoints,
+  sectionName: sections.name,
+};
+
+function shuffle<T>(items: readonly T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j]!, copy[i]!];
+  }
+  return copy;
+}
+
+function injectBriefTokens(text: string, tokens: TokenValues): string {
+  return text
+    .replace(/\{callsign\}/g, tokens.callsign)
+    .replace(/\{runway\}/g, tokens.runway)
+    .replace(/\{icao\}/g, tokens.icao);
+}
+
+function injectRadioLines(
+  lines: { speaker: "atc" | "pilot"; text: string }[],
+  tokens: TokenValues
+): { speaker: "atc" | "pilot"; text: string }[] {
+  return lines.map((line) => ({
+    ...line,
+    text: injectBriefTokens(line.text, tokens),
+  }));
+}
+
+function toRiskPoints(value: number | null | undefined, emergencyBoost = false): number {
+  const base = Math.max(1, Math.trunc(value ?? 1));
+  const boosted = emergencyBoost ? base + 1 : base;
+  return Math.min(boosted, MAX_RISK_POINTS);
+}
+
+function getCandidateId(candidate: EmergencyQuestionCandidate): string {
+  return candidate.kind === "db" ? candidate.card.id : candidate.card.id;
+}
+
+function toDbQuestionPayload(
+  card: QuestionRow,
+  phase: FlightPhase,
+  tokens: TokenValues,
+  options?: { emergencyName?: string; emergencyBoost?: boolean }
+) {
+  const scenario = SCENARIO_MAP[card.id];
+  const emergencyName = options?.emergencyName;
+
+  let stem = card.stem;
+  let option1 = card.option1;
+  let option2 = card.option2;
+  let option3 = card.option3;
+  let option4 = card.option4;
+
+  if (scenario) {
+    stem = injectBriefTokens(scenario.scenarioStem, tokens);
+    option1 = injectBriefTokens(scenario.scenarioOptions[0]!, tokens);
+    option2 = injectBriefTokens(scenario.scenarioOptions[1]!, tokens);
+    option3 = injectBriefTokens(scenario.scenarioOptions[2]!, tokens);
+    option4 = injectBriefTokens(scenario.scenarioOptions[3]!, tokens);
+  }
+
+  const baseContext = injectBriefTokens(card.flightContext ?? "", tokens);
+  const flightContext = emergencyName
+    ? `[${emergencyName.toUpperCase()}] ${baseContext}`
+    : baseContext;
+
+  return {
+    type: "question",
+    id: card.id,
+    stem,
+    option1,
+    option2,
+    option3,
+    option4,
+    correctOption: card.correctOption,
+    phase,
+    flightContext,
+    explanation: card.explanation,
+    isCritical: !!card.isCritical,
+    riskPoints: toRiskPoints(card.riskPoints, options?.emergencyBoost),
+    sectionName: card.sectionName,
+    hasScenario: !!scenario,
+    ...(emergencyName ? { isEmergency: true } : {}),
+  };
+}
+
+function toRocQuestionPayload(
+  card: RocACard,
+  phase: FlightPhase,
+  tokens: TokenValues,
+  options?: { emergencyName?: string; emergencyBoost?: boolean }
+) {
+  const emergencyName = options?.emergencyName;
+  const baseContext = injectBriefTokens(card.flightContext, tokens);
+  const flightContext = emergencyName
+    ? `[${emergencyName.toUpperCase()}] ${baseContext}`
+    : baseContext;
+
+  return {
+    type: "question",
+    id: card.id,
+    stem: injectBriefTokens(card.stem, tokens),
+    option1: injectBriefTokens(card.options[0], tokens),
+    option2: injectBriefTokens(card.options[1], tokens),
+    option3: injectBriefTokens(card.options[2], tokens),
+    option4: injectBriefTokens(card.options[3], tokens),
+    correctOption: card.correctOption,
+    phase,
+    flightContext,
+    explanation: card.explanation,
+    isCritical: card.isCritical,
+    riskPoints: toRiskPoints(card.riskPoints, options?.emergencyBoost),
+    sectionName: card.sectionName,
+    hasScenario: true,
+    isRocA: true,
+    ...(emergencyName ? { isEmergency: true } : {}),
+  };
+}
+
+async function loadEmergencyCandidates(event: EmergencyEvent): Promise<EmergencyQuestionCandidate[]> {
+  const dbCards = event.questionPool.length > 0
+    ? await db
+        .select(QUESTION_SELECT)
+        .from(questions)
+        .innerJoin(sections, eq(questions.sectionId, sections.id))
+        .where(inArray(questions.id, event.questionPool))
+        .orderBy(sql`random()`)
+    : [];
+
+  const rocCards = ROC_A_CARDS.filter((card) => event.rocAPool.includes(card.id));
+
+  return shuffle([
+    ...dbCards.map((card) => ({ kind: "db" as const, card })),
+    ...rocCards.map((card) => ({ kind: "roc" as const, card })),
+  ]);
+}
 
 /** GET: Fetch hop sequence — question cards interleaved with radio exchanges */
 export async function GET() {
   try {
-    const targetTotal = 8 + Math.floor(Math.random() * 5); // 8-12
-    const phaseCounts = distributeCards(targetTotal);
+    const targetQuestionCount = 8 + Math.floor(Math.random() * 5); // 8-12
     const brief = generateFlightBrief();
     const wxConditions = detectWeatherConditions(brief.metar.template.decoded);
+    const tokens: TokenValues = {
+      callsign: brief.callsign,
+      runway: brief.runway,
+      icao: brief.airport.icao,
+    };
 
-    // Decide if this hop includes a ROC-A card (50% chance, max 1 per hop)
-    const includeRocA = Math.random() < 0.5;
-    let rocACard = null;
-    if (includeRocA) {
-      const randomIdx = Math.floor(Math.random() * ROC_A_CARDS.length);
-      rocACard = ROC_A_CARDS[randomIdx]!;
+    let plannedRocA = Math.random() < 0.5
+      ? shuffle(ROC_A_CARDS)[0] ?? null
+      : null;
+
+    const weatherRiskSeed = Math.min(
+      wxConditions.filter((condition) => condition !== "good_vfr").length,
+      MAX_RISK_POINTS
+    );
+
+    const emergencyTriggers = PHASES
+      .map((phase) => {
+        const event = maybePickEmergency(phase, weatherRiskSeed);
+        return event ? { phase, event } : null;
+      })
+      .filter((entry): entry is { phase: FlightPhase; event: EmergencyEvent } => entry !== null);
+
+    const candidateEmergency = emergencyTriggers.length > 0
+      ? shuffle(emergencyTriggers)[0] ?? null
+      : null;
+
+    const emergencyCandidates = candidateEmergency
+      ? await loadEmergencyCandidates(candidateEmergency.event)
+      : [];
+
+    let emergencyBudget = Math.min(MAX_EMERGENCY_QUESTIONS, emergencyCandidates.length);
+    while (
+      targetQuestionCount - ((plannedRocA ? 1 : 0) + emergencyBudget) < MIN_BASE_QUESTIONS
+    ) {
+      if (emergencyBudget > 0) {
+        emergencyBudget--;
+      } else if (plannedRocA) {
+        plannedRocA = null;
+      } else {
+        break;
+      }
     }
 
-    const sequence: unknown[] = [];
+    const optionalIds = new Set<string>();
+    if (plannedRocA) optionalIds.add(plannedRocA.id);
+
+    const emergencyCards: EmergencyQuestionCandidate[] = [];
+    for (const candidate of emergencyCandidates) {
+      if (emergencyCards.length >= emergencyBudget) break;
+      const id = getCandidateId(candidate);
+      if (optionalIds.has(id)) continue;
+      emergencyCards.push(candidate);
+      optionalIds.add(id);
+    }
+
+    const emergencyPlan: EmergencyPlan | null =
+      candidateEmergency && emergencyCards.length > 0
+        ? {
+            phase: candidateEmergency.phase,
+            event: candidateEmergency.event,
+            cards: emergencyCards,
+          }
+        : null;
+
+    const reservedQuestions = (plannedRocA ? 1 : 0) + (emergencyPlan ? emergencyPlan.cards.length : 0);
+    const baseQuestionTarget = targetQuestionCount - reservedQuestions;
+    const phaseCounts = distributeCards(baseQuestionTarget);
+
+    const sequence: Record<string, unknown>[] = [];
+    const usedQuestionIds = new Set<string>();
 
     for (const phase of PHASES) {
       const count = phaseCounts[phase];
-      const preferredIds = getWeatherPreferredIds(phase as FlightPhase, wxConditions);
+      const preferredIds = new Set(getWeatherPreferredIds(phase, wxConditions));
 
-      // Pick 1 radio exchange for this phase (placed before the first question card)
-      const radioExchanges = pickRadioExchanges(phase as FlightPhase, 1);
-      for (const rx of radioExchanges) {
+      // Pick 1 radio exchange for this phase (placed before first question card)
+      for (const rx of pickRadioExchanges(phase, 1)) {
         sequence.push({
           type: "radio",
           id: rx.id,
           phase: rx.phase,
           context: rx.context,
-          lines: rx.lines,
+          lines: injectRadioLines(rx.lines, tokens),
         });
       }
 
-      // Fetch question cards with weather bias
-      let phaseCards;
-      if (preferredIds.length > 0) {
-        const preferred = await db
-          .select({
-            id: questions.id, stem: questions.stem,
-            option1: questions.option1, option2: questions.option2,
-            option3: questions.option3, option4: questions.option4,
-            correctOption: questions.correctOption, phase: questions.phase,
-            flightContext: questions.flightContext, explanation: questions.explanation,
-            isCritical: questions.isCritical, riskPoints: questions.riskPoints,
-            sectionName: sections.name,
-          })
-          .from(questions)
-          .innerJoin(sections, eq(questions.sectionId, sections.id))
-          .where(inArray(questions.id, preferredIds))
-          .orderBy(sql`random()`)
-          .limit(count);
+      // Pull phase-matching cards, then prioritize weather-biased IDs.
+      const phasePool: QuestionRow[] = await db
+        .select(QUESTION_SELECT)
+        .from(questions)
+        .innerJoin(sections, eq(questions.sectionId, sections.id))
+        .where(eq(questions.phase, phase))
+        .orderBy(sql`random()`);
 
-        if (preferred.length >= count) {
-          phaseCards = preferred;
-        } else {
-          const usedIds = preferred.map((c) => c.id);
-          const remaining = count - preferred.length;
-          const filler = await db
-            .select({
-              id: questions.id, stem: questions.stem,
-              option1: questions.option1, option2: questions.option2,
-              option3: questions.option3, option4: questions.option4,
-              correctOption: questions.correctOption, phase: questions.phase,
-              flightContext: questions.flightContext, explanation: questions.explanation,
-              isCritical: questions.isCritical, riskPoints: questions.riskPoints,
-              sectionName: sections.name,
-            })
-            .from(questions)
-            .innerJoin(sections, eq(questions.sectionId, sections.id))
-            .where(eq(questions.phase, phase as string))
-            .orderBy(sql`random()`)
-            .limit(remaining + usedIds.length);
+      const prioritizedPool = [
+        ...phasePool.filter((card) => preferredIds.has(card.id)),
+        ...phasePool.filter((card) => !preferredIds.has(card.id)),
+      ];
 
-          const filtered = filler.filter((c) => !usedIds.includes(c.id)).slice(0, remaining);
-          phaseCards = [...preferred, ...filtered];
-        }
-      } else {
-        phaseCards = await db
-          .select({
-            id: questions.id, stem: questions.stem,
-            option1: questions.option1, option2: questions.option2,
-            option3: questions.option3, option4: questions.option4,
-            correctOption: questions.correctOption, phase: questions.phase,
-            flightContext: questions.flightContext, explanation: questions.explanation,
-            isCritical: questions.isCritical, riskPoints: questions.riskPoints,
-            sectionName: sections.name,
-          })
-          .from(questions)
-          .innerJoin(sections, eq(questions.sectionId, sections.id))
-          .where(eq(questions.phase, phase as string))
-          .orderBy(sql`random()`)
-          .limit(count);
+      const selectedCards: QuestionRow[] = [];
+      for (const card of prioritizedPool) {
+        if (selectedCards.length >= count) break;
+        if (optionalIds.has(card.id) || usedQuestionIds.has(card.id)) continue;
+        selectedCards.push(card);
+        usedQuestionIds.add(card.id);
       }
 
-      // Map question cards with scenario overlay and brief token injection
-      for (let i = 0; i < phaseCards.length; i++) {
-        const card = phaseCards[i]!;
-
-        let ctx = card.flightContext ?? "";
-        ctx = ctx
-          .replace(/\{callsign\}/g, brief.callsign)
-          .replace(/\{runway\}/g, brief.runway)
-          .replace(/\{icao\}/g, brief.airport.icao);
-
-        const scenario = SCENARIO_MAP[card.id];
-        let stem = card.stem;
-        let o1 = card.option1, o2 = card.option2, o3 = card.option3, o4 = card.option4;
-
-        if (scenario) {
-          stem = scenario.scenarioStem
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway)
-            .replace(/\{icao\}/g, brief.airport.icao);
-          o1 = scenario.scenarioOptions[0]
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway);
-          o2 = scenario.scenarioOptions[1]
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway);
-          o3 = scenario.scenarioOptions[2]
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway);
-          o4 = scenario.scenarioOptions[3]
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway);
-        }
-
-        sequence.push({
-          type: "question",
-          id: card.id,
-          stem, option1: o1, option2: o2, option3: o3, option4: o4,
-          correctOption: card.correctOption,
-          phase: card.phase,
-          flightContext: ctx,
-          explanation: card.explanation,
-          isCritical: card.isCritical,
-          riskPoints: card.riskPoints,
-          sectionName: card.sectionName,
-          hasScenario: !!scenario,
-        });
+      for (let i = 0; i < selectedCards.length; i++) {
+        sequence.push(toDbQuestionPayload(selectedCards[i]!, phase, tokens));
 
         // Add a radio exchange between question cards (not after the last one in a phase)
-        if (i < phaseCards.length - 1 && Math.random() < 0.4) {
-          const midExchanges = pickRadioExchanges(phase as FlightPhase, 1);
-          for (const rx of midExchanges) {
+        if (i < selectedCards.length - 1 && Math.random() < 0.4) {
+          for (const rx of pickRadioExchanges(phase, 1)) {
             sequence.push({
               type: "radio",
-              id: rx.id + "-mid",
+              id: `${rx.id}-mid-${sequence.length}`,
               phase: rx.phase,
               context: rx.context,
-              lines: rx.lines,
+              lines: injectRadioLines(rx.lines, tokens),
             });
           }
         }
       }
 
-      // Maybe inject an emergency event in this phase
-      const emergency = maybePickEmergency(phase as FlightPhase, 0);
-      if (emergency) {
-        // Emergency announcement card
+      if (emergencyPlan && phase === emergencyPlan.phase) {
+        const event = emergencyPlan.event;
+
         sequence.push({
           type: "emergency",
-          id: emergency.id,
-          name: emergency.name,
-          phase: phase,
-          announcement: emergency.announcement,
-          panelLabel: emergency.panelLabel,
-          panelSub: emergency.panelSub,
-          timerPenalty: emergency.timerPenalty,
-          immediateRisk: emergency.immediateRisk,
-          resolution: emergency.resolution,
-          radioLines: emergency.radioLines.map((l) => ({
-            ...l,
-            text: l.text
-              .replace(/\{callsign\}/g, brief.callsign)
-              .replace(/\{runway\}/g, brief.runway)
-              .replace(/\{icao\}/g, brief.airport.icao),
-          })),
+          id: event.id,
+          name: event.name,
+          phase,
+          announcement: event.announcement,
+          panelLabel: event.panelLabel,
+          panelSub: event.panelSub,
+          timerPenalty: event.timerPenalty,
+          immediateRisk: event.immediateRisk,
+          resolution: event.resolution,
+          radioLines: injectRadioLines(event.radioLines, tokens),
         });
 
-        // Emergency-specific radio exchange (the emergency comms)
-        if (emergency.radioLines.length > 0) {
+        if (event.radioLines.length > 0) {
           sequence.push({
             type: "radio",
-            id: `emergency-radio-${emergency.id}`,
-            phase: phase,
-            context: `Emergency communications — ${emergency.name}`,
-            lines: emergency.radioLines.map((l) => ({
-              ...l,
-              text: l.text
-                .replace(/\{callsign\}/g, brief.callsign)
-                .replace(/\{runway\}/g, brief.runway)
-                .replace(/\{icao\}/g, brief.airport.icao),
-            })),
+            id: `emergency-radio-${event.id}`,
+            phase,
+            context: `Emergency communications - ${event.name}`,
+            lines: injectRadioLines(event.radioLines, tokens),
           });
         }
 
-        // Pull 2 emergency-specific question cards from the PSTAR pool
-        if (emergency.questionPool.length > 0) {
-          const emergencyQuestions = await db
-            .select({
-              id: questions.id, stem: questions.stem,
-              option1: questions.option1, option2: questions.option2,
-              option3: questions.option3, option4: questions.option4,
-              correctOption: questions.correctOption, phase: questions.phase,
-              flightContext: questions.flightContext, explanation: questions.explanation,
-              isCritical: questions.isCritical, riskPoints: questions.riskPoints,
-              sectionName: sections.name,
-            })
-            .from(questions)
-            .innerJoin(sections, eq(questions.sectionId, sections.id))
-            .where(inArray(questions.id, emergency.questionPool))
-            .orderBy(sql`random()`)
-            .limit(2);
+        for (const candidate of emergencyPlan.cards) {
+          const id = getCandidateId(candidate);
+          if (usedQuestionIds.has(id)) continue;
 
-          for (const eq2 of emergencyQuestions) {
-            const scenario = SCENARIO_MAP[eq2.id];
-            let stem2 = eq2.stem;
-            let eo1 = eq2.option1, eo2 = eq2.option2, eo3 = eq2.option3, eo4 = eq2.option4;
-            let ctx2 = eq2.flightContext ?? "";
-
-            ctx2 = `[${emergency.name.toUpperCase()}] ${ctx2}`
-              .replace(/\{callsign\}/g, brief.callsign)
-              .replace(/\{runway\}/g, brief.runway)
-              .replace(/\{icao\}/g, brief.airport.icao);
-
-            if (scenario) {
-              stem2 = scenario.scenarioStem
-                .replace(/\{callsign\}/g, brief.callsign)
-                .replace(/\{runway\}/g, brief.runway)
-                .replace(/\{icao\}/g, brief.airport.icao);
-              eo1 = scenario.scenarioOptions[0].replace(/\{callsign\}/g, brief.callsign).replace(/\{runway\}/g, brief.runway);
-              eo2 = scenario.scenarioOptions[1].replace(/\{callsign\}/g, brief.callsign).replace(/\{runway\}/g, brief.runway);
-              eo3 = scenario.scenarioOptions[2].replace(/\{callsign\}/g, brief.callsign).replace(/\{runway\}/g, brief.runway);
-              eo4 = scenario.scenarioOptions[3].replace(/\{callsign\}/g, brief.callsign).replace(/\{runway\}/g, brief.runway);
-            }
-
-            sequence.push({
-              type: "question",
-              id: eq2.id,
-              stem: stem2, option1: eo1, option2: eo2, option3: eo3, option4: eo4,
-              correctOption: eq2.correctOption,
-              phase: phase,
-              flightContext: ctx2,
-              explanation: eq2.explanation,
-              isCritical: eq2.isCritical,
-              riskPoints: Math.min((eq2.riskPoints ?? 1) + 1, 3), // emergency cards are riskier
-              sectionName: eq2.sectionName,
-              hasScenario: !!scenario,
-              isEmergency: true,
-            });
+          if (candidate.kind === "db") {
+            sequence.push(
+              toDbQuestionPayload(candidate.card, phase, tokens, {
+                emergencyName: event.name,
+                emergencyBoost: true,
+              })
+            );
+          } else {
+            sequence.push(
+              toRocQuestionPayload(candidate.card, phase, tokens, {
+                emergencyName: event.name,
+                emergencyBoost: true,
+              })
+            );
           }
 
-          // Emergency resolution transition
-          sequence.push({
-            type: "radio",
-            id: `emergency-resolve-${emergency.id}`,
-            phase: phase,
-            context: emergency.resolution,
-            lines: [],
-          });
+          usedQuestionIds.add(id);
         }
+
+        sequence.push({
+          type: "radio",
+          id: `emergency-resolve-${event.id}`,
+          phase,
+          context: event.resolution,
+          lines: [],
+        });
       }
 
-      // Insert ROC-A card in the enroute phase if selected
-      if (rocACard && phase === rocACard.phase) {
-        sequence.push({
-          type: "question",
-          id: rocACard.id,
-          stem: rocACard.stem
-            .replace(/\{callsign\}/g, brief.callsign)
-            .replace(/\{runway\}/g, brief.runway)
-            .replace(/\{icao\}/g, brief.airport.icao),
-          option1: rocACard.options[0],
-          option2: rocACard.options[1],
-          option3: rocACard.options[2],
-          option4: rocACard.options[3],
-          correctOption: rocACard.correctOption,
-          phase: rocACard.phase,
-          flightContext: rocACard.flightContext,
-          explanation: rocACard.explanation,
-          isCritical: rocACard.isCritical,
-          riskPoints: rocACard.riskPoints,
-          sectionName: rocACard.sectionName,
-          hasScenario: true,
-          isRocA: true,
-        });
-        rocACard = null; // only insert once
+      if (plannedRocA && phase === plannedRocA.phase) {
+        if (!usedQuestionIds.has(plannedRocA.id)) {
+          sequence.push(toRocQuestionPayload(plannedRocA, phase, tokens));
+          usedQuestionIds.add(plannedRocA.id);
+        }
+        plannedRocA = null;
       }
     }
 
-    // Inject brief tokens into all radio exchange lines
-    const finalSequence = sequence.map((item: any) => {
-      if (item.type === "radio" && item.lines) {
-        return {
-          ...item,
-          lines: item.lines.map((line: any) => ({
-            ...line,
-            text: line.text
-              .replace(/\{callsign\}/g, brief.callsign)
-              .replace(/\{runway\}/g, brief.runway)
-              .replace(/\{icao\}/g, brief.airport.icao),
-          })),
-        };
-      }
-      return item;
-    });
-
-    return NextResponse.json({ sequence: finalSequence, brief, wxConditions });
+    return NextResponse.json({ sequence, brief, wxConditions });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
