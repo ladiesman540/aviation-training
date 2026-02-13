@@ -36,7 +36,7 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
       </head>
       <body className="bg-bg-deep">
-        <div className="min-h-screen min-h-[100dvh] bg-bg-deep text-[#e8ecf0]">
+        <div className="app-scroll-container bg-bg-deep text-[#e8ecf0]">
           <div className="bg-grid fixed inset-0 pointer-events-none z-0" aria-hidden />
           <div className="bg-noise fixed inset-0 pointer-events-none z-0" aria-hidden />
 
@@ -70,7 +70,7 @@ export default function RootLayout({
             </div>
           </header>
 
-          <main className="relative z-[1]">{children}</main>
+          <main className="relative z-[1] pb-24">{children}</main>
         </div>
       </body>
     </html>

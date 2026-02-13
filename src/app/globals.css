@@ -19,15 +19,28 @@
   --radius-lg: 8px;
 }
 
-/* Prevent pull-to-refresh on mobile during gameplay */
-html, body {
-  overscroll-behavior: none;
+/* Prevent pull-to-refresh and overscroll bounce */
+html {
   background-color: #060809;
+  height: 100%;
+  overflow: hidden;
 }
 
 body {
-  min-height: 100vh;
-  min-height: 100dvh; /* dynamic viewport height for mobile */
+  background-color: #060809;
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+}
+
+/* Main app container - this is where scrolling happens */
+.app-scroll-container {
+  height: 100vh;
+  height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Prevent text selection during gameplay taps */
