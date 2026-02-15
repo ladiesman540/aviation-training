@@ -27,6 +27,35 @@ import { recordAnswer } from "@/lib/mastery";
 
 type GameState = "loading" | "brief" | "wx_decode" | "go_nogo" | "playing" | "transition" | "bust" | "debrief";
 
+const RECENT_QUESTION_IDS_KEY = "hop_recent_question_ids_v1";
+const MAX_RECENT_QUESTION_IDS = 140;
+const MAX_SENT_SEEN_IDS = 100;
+
+function readRecentQuestionIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(RECENT_QUESTION_IDS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id): id is string => typeof id === "string");
+  } catch {
+    return [];
+  }
+}
+
+function storeRecentQuestionIds(ids: string[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      RECENT_QUESTION_IDS_KEY,
+      JSON.stringify(ids.slice(0, MAX_RECENT_QUESTION_IDS))
+    );
+  } catch {
+    // ignore localStorage write failures
+  }
+}
+
 /** Phase panel labels using flight brief context */
 const PHASE_PANEL: Record<FlightPhase, (b: FlightBrief) => { label: string; sub: string }> = {
   preflight: (b) => ({ label: `RAMP — ${b.airport.icao}`, sub: `${b.airport.name} Municipal` }),
@@ -64,8 +93,10 @@ export default function HopSessionPage() {
 
   // Fetch sequence (mixed question cards + radio exchanges) and flight brief
   useEffect(() => {
+    const recentQuestionIds = readRecentQuestionIds();
+    const seen = recentQuestionIds.slice(0, MAX_SENT_SEEN_IDS).join(",");
     fetch(
-      `/api/hop?aircraft=${encodeURIComponent(aircraft)}&mission=${encodeURIComponent(missionType)}`,
+      `/api/hop?aircraft=${encodeURIComponent(aircraft)}&mission=${encodeURIComponent(missionType)}&seen=${encodeURIComponent(seen)}`,
       { cache: "no-store" }
     )
       .then((r) => {
@@ -124,6 +155,11 @@ export default function HopSessionPage() {
         setSequence(mapped);
         // Extract question cards only for debrief
         setCards(mapped.filter((s): s is HopCard => s.type === "question"));
+        const questionIds = mapped
+          .filter((s): s is HopCard => s.type === "question")
+          .map((s) => s.questionId);
+        const mergedRecent = [...questionIds, ...recentQuestionIds.filter((id) => !questionIds.includes(id))];
+        storeRecentQuestionIds(mergedRecent);
         if (briefData) setBrief(briefData as FlightBrief);
         setGameState("brief");
       })

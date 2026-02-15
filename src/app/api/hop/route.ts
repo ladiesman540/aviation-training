@@ -105,6 +105,9 @@ const MISSION_EMERGENCY_ATTEMPTS: Record<MissionType, number> = {
   "short-hop": 1,
   "cross-country": 3,
 };
+const MAX_SEEN_IDS = 140;
+const QUESTION_ID_PATTERN = /^(?:\d+\.\d+|roc-[a-z0-9-]+)$/i;
+const SEEN_QUESTION_IDS_COOKIE = "hop_recent_question_ids_v1";
 
 const QUESTION_SELECT = {
   id: questions.id,
@@ -278,6 +281,16 @@ function normalizeAircraft(raw: string | null): AircraftType {
   return "C172";
 }
 
+function parseSeenQuestionIds(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  const parsed = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0 && QUESTION_ID_PATTERN.test(id))
+    .slice(0, MAX_SEEN_IDS);
+  return new Set(parsed);
+}
+
 function rebalanceByMission(
   counts: Record<FlightPhase, number>,
   mission: MissionType,
@@ -360,6 +373,11 @@ export async function GET(request: NextRequest) {
     noStore();
     const mission = normalizeMission(request.nextUrl.searchParams.get("mission"));
     const aircraft = normalizeAircraft(request.nextUrl.searchParams.get("aircraft"));
+    const seenFromQuery = parseSeenQuestionIds(request.nextUrl.searchParams.get("seen"));
+    const seenFromCookie = parseSeenQuestionIds(
+      request.cookies.get(SEEN_QUESTION_IDS_COOKIE)?.value ?? null
+    );
+    const seenQuestionIds = new Set([...seenFromCookie, ...seenFromQuery]);
     const missionBounds = MISSION_PHASE_BOUNDS[mission];
     const minBaseQuestions = sumPhaseMins(missionBounds);
     const [minQuestions, maxQuestions] = MISSION_TARGETS[mission];
@@ -372,8 +390,10 @@ export async function GET(request: NextRequest) {
       icao: brief.airport.icao,
     };
 
+    const unseenRocPool = ROC_A_CARDS.filter((card) => !seenQuestionIds.has(card.id));
+    const rocPool = unseenRocPool.length > 0 ? unseenRocPool : ROC_A_CARDS;
     let plannedRocA = Math.random() < 0.5
-      ? shuffle(ROC_A_CARDS)[0] ?? null
+      ? shuffle(rocPool)[0] ?? null
       : null;
 
     const weatherRiskSeed = Math.min(
@@ -413,16 +433,26 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const optionalIds = new Set<string>();
-    if (plannedRocA) optionalIds.add(plannedRocA.id);
+    const reservedIds = new Set<string>();
+    if (plannedRocA) reservedIds.add(plannedRocA.id);
 
     const emergencyCards: EmergencyQuestionCandidate[] = [];
     for (const candidate of emergencyCandidates) {
       if (emergencyCards.length >= emergencyBudget) break;
       const id = getCandidateId(candidate);
-      if (optionalIds.has(id)) continue;
+      if (reservedIds.has(id) || seenQuestionIds.has(id)) continue;
       emergencyCards.push(candidate);
-      optionalIds.add(id);
+      reservedIds.add(id);
+    }
+    // If seen-id filtering is too strict, relax it so we can still fill the hop.
+    if (emergencyCards.length < emergencyBudget) {
+      for (const candidate of emergencyCandidates) {
+        if (emergencyCards.length >= emergencyBudget) break;
+        const id = getCandidateId(candidate);
+        if (reservedIds.has(id)) continue;
+        emergencyCards.push(candidate);
+        reservedIds.add(id);
+      }
     }
 
     const emergencyPlan: EmergencyPlan | null =
@@ -478,9 +508,18 @@ export async function GET(request: NextRequest) {
       const selectedCards: QuestionRow[] = [];
       for (const card of prioritizedPool) {
         if (selectedCards.length >= count) break;
-        if (optionalIds.has(card.id) || usedQuestionIds.has(card.id)) continue;
+        if (reservedIds.has(card.id) || usedQuestionIds.has(card.id) || seenQuestionIds.has(card.id)) continue;
         selectedCards.push(card);
         usedQuestionIds.add(card.id);
+      }
+      // If strict seen-id exclusion prevents enough cards, relax exclusion but keep no-duplicate guarantees.
+      if (selectedCards.length < count) {
+        for (const card of prioritizedPool) {
+          if (selectedCards.length >= count) break;
+          if (reservedIds.has(card.id) || usedQuestionIds.has(card.id)) continue;
+          selectedCards.push(card);
+          usedQuestionIds.add(card.id);
+        }
       }
 
       for (let i = 0; i < selectedCards.length; i++) {
@@ -568,7 +607,30 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    return NextResponse.json(
+    const selectedQuestionIds = sequence
+      .map((item) =>
+        item.type === "question" && typeof item.id === "string" ? item.id : null
+      )
+      .filter((id): id is string => id !== null);
+    const mergedSeenIds: string[] = [];
+    const seenMergedSet = new Set<string>();
+
+    for (const id of selectedQuestionIds) {
+      if (seenMergedSet.has(id)) continue;
+      seenMergedSet.add(id);
+      mergedSeenIds.push(id);
+      if (mergedSeenIds.length >= MAX_SEEN_IDS) break;
+    }
+    if (mergedSeenIds.length < MAX_SEEN_IDS) {
+      for (const id of seenQuestionIds) {
+        if (seenMergedSet.has(id)) continue;
+        seenMergedSet.add(id);
+        mergedSeenIds.push(id);
+        if (mergedSeenIds.length >= MAX_SEEN_IDS) break;
+      }
+    }
+
+    const response = NextResponse.json(
       {
         sequence,
         brief,
@@ -581,6 +643,12 @@ export async function GET(request: NextRequest) {
         },
       }
     );
+    response.cookies.set(SEEN_QUESTION_IDS_COOKIE, mergedSeenIds.join(","), {
+      path: "/",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+    return response;
   } catch (e) {
     return NextResponse.json(
       { error: String(e) },
